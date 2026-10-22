@@ -78,24 +78,19 @@ HostIpc::HostIpc(int socket) : socket_(socket) {
 std::optional<HostIpc::Message> HostIpc::Request(std::string_view type,
                                                  Message fields) {
   uint64_t id;
-  bool first;
   {
     std::lock_guard lock(mutex_);
     if (closed_) {
       return std::nullopt;
     }
     id = next_id_++;
-    first = pending_.empty();
     pending_.emplace(id, std::nullopt);
-  }
-  if (first) {
-    SetHostUIActive(true);
   }
 
   // A reply arriving before the wait starts is fine: it's in pending_.
   bool written = Write(type, id, fields);
   std::optional<Message> reply;
-  bool last;
+  bool hide_ended = false;
   {
     std::unique_lock lock(mutex_);
     if (written) {
@@ -103,9 +98,12 @@ std::optional<HostIpc::Message> HostIpc::Request(std::string_view type,
     }
     reply = std::move(pending_.at(id));
     pending_.erase(id);
-    last = pending_.empty();
+    if (pending_.empty() && host_ui_shown_) {
+      host_ui_shown_ = false;
+      hide_ended = true;
+    }
   }
-  if (last) {
+  if (hide_ended) {
     SetHostUIActive(false);
   }
   return reply;
@@ -148,7 +146,7 @@ std::string HostIpc::SaveFrame(const RawImage& image) {
 
 bool HostIpc::host_ui_active() const {
   std::lock_guard lock(mutex_);
-  return !pending_.empty();
+  return host_ui_shown_;
 }
 
 void HostIpc::SetHostUIListener(std::function<void(bool active)> listener) {
@@ -264,7 +262,24 @@ void HostIpc::OnLine(std::string_view line) {
   }
   auto reply_to = document.FindMember("reply_to");
   if (reply_to == document.MemberEnd() || !reply_to->value.IsUint64()) {
-    // Nothing else comes from the host yet.
+    auto type = document.FindMember("type");
+    if (type != document.MemberEnd() && type->value.IsString() &&
+        std::string_view(type->value.GetString()) == "ui_shown") {
+      // The host has drawn its UI for a request, over the frame it was
+      // given: only now the game can hide without a glimpse of what was
+      // under it.
+      bool hide = false;
+      {
+        std::lock_guard lock(mutex_);
+        if (!pending_.empty() && !host_ui_shown_) {
+          host_ui_shown_ = true;
+          hide = true;
+        }
+      }
+      if (hide) {
+        SetHostUIActive(true);
+      }
+    }
     return;
   }
   Message message;

@@ -33,7 +33,10 @@ struct RawImage;
 // One JSON object per line over a Unix socket, both ways:
 //  - requests from Xenia: {"id": 1, "type": "keyboard", ...fields}, answered
 //    by the host with {"reply_to": 1, ...fields};
-//  - events from Xenia (no reply): {"type": "...", ...fields}.
+//  - events from Xenia (no reply): {"type": "...", ...fields};
+//  - from the host, {"type": "ui_shown"} once it has drawn the UI for a
+//    request: the game hides then (until the last request is answered), so
+//    the host's UI shows.
 class HostIpc {
  public:
   using Value = std::variant<bool, int64_t, std::string>;
@@ -44,8 +47,9 @@ class HostIpc {
   static HostIpc* Get();
 
   // Sends a request and waits for the host's reply. Empty if the host went
-  // away first. While any request is waiting, host UI is active: the host
-  // draws over where the game is (see SetHostUIListener).
+  // away first. Host UI is active from the host's "ui_shown" until the last
+  // waiting request is answered: the host draws over where the game is (see
+  // SetHostUIListener).
   std::optional<Message> Request(std::string_view type, Message fields);
   void Send(std::string_view type, Message fields);
 
@@ -79,6 +83,7 @@ class HostIpc {
   mutable std::mutex mutex_;
   std::condition_variable replied_;
   bool closed_ = false;
+  bool host_ui_shown_ = false;
   uint64_t next_id_ = 1;
   uint64_t next_frame_ = 1;
   std::map<uint64_t, std::optional<Message>> pending_;
