@@ -17,6 +17,7 @@
 #include "xenia/kernel/xam/xam_content_device.h"
 #include "xenia/kernel/xam/xam_private.h"
 #include "xenia/ui/file_picker.h"
+#include "xenia/ui/host_ipc.h"
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
 #include "xenia/ui/imgui_guest_notification.h"
@@ -508,6 +509,38 @@ dword_result_t XamShowKeyboardUI_entry(
       return X_ERROR_SUCCESS;
     };
     result = xeXamDispatchHeadless(run, overlapped);
+  } else if (xe::ui::HostIpc* host = xe::ui::HostIpc::Get()) {
+    // The host (xbox-dash) draws the keyboard.
+    if (kernel_state()->xam_state()->IsUIActive()) {
+      return X_ERROR_ACCESS_DENIED;
+    }
+    kernel_state()->xam_state()->is_xam_dialog_present_.store(true);
+
+    xe::ui::HostIpc::Message request = {
+        {"user_index", int64_t(user_index)},
+        {"flags", int64_t(flags)},
+        {"title", title ? xe::to_utf8(title.value()) : ""},
+        {"description", description ? xe::to_utf8(description.value()) : ""},
+        {"text", default_text ? xe::to_utf8(default_text.value()) : ""},
+        // The buffer holds the terminating null too.
+        {"max_length", int64_t(buffer_length ? buffer_length - 1 : 0)},
+    };
+    auto run = [host, request, buffer, buffer_length](
+                   uint32_t& extended_error, uint32_t& length) -> X_RESULT {
+      auto reply = host->Request("keyboard", request);
+      kernel_state()->xam_state()->is_xam_dialog_present_.store(false);
+      length = 0;
+      // The host going away counts as cancelling.
+      if (!reply || xe::ui::HostIpc::GetBool(*reply, "cancelled")) {
+        extended_error = X_ERROR_CANCELLED;
+        return X_ERROR_SUCCESS;
+      }
+      auto text = xe::to_utf16(xe::ui::HostIpc::GetString(*reply, "text"));
+      string_util::copy_and_swap_truncating(buffer, text, buffer_length);
+      extended_error = X_ERROR_SUCCESS;
+      return X_ERROR_SUCCESS;
+    };
+    result = xeXamDispatchHeadlessEx(run, overlapped);
   } else {
     auto close = [buffer, buffer_length](KeyboardInputDialog* dialog,
                                          uint32_t& extended_error,

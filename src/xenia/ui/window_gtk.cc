@@ -17,6 +17,7 @@
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/platform_linux.h"
+#include "xenia/ui/host_ipc.h"
 #include "xenia/ui/surface_gnulinux.h"
 #include "xenia/ui/virtual_key.h"
 #include "xenia/ui/window_gtk.h"
@@ -48,6 +49,9 @@ GTKWindow::GTKWindow(WindowedAppContext& app_context,
 GTKWindow::~GTKWindow() {
   EnterDestructor();
   if (embed_parent_) {
+    if (HostIpc* host = HostIpc::Get()) {
+      host->SetHostUIListener(nullptr);
+    }
     gdk_window_remove_filter(embed_parent_, EmbedParentFilter, this);
     g_object_unref(embed_parent_);
     embed_parent_ = nullptr;
@@ -88,6 +92,12 @@ bool GTKWindow::OpenImpl() {
     // A GtkPlug creates its X window as a child of the given one. The parent
     // doesn't need to be a GtkSocket: the XEmbed messages are just ignored.
     window_ = gtk_plug_new(parent_xid);
+    if (HostIpc* host = HostIpc::Get()) {
+      host->SetHostUIListener([this](bool active) {
+        app_context().CallInUIThread(
+            [this, active]() { SetHiddenForHostUI(active); });
+      });
+    }
   } else {
     window_ = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   }
@@ -342,11 +352,27 @@ void GTKWindow::FillEmbedParent() {
 }
 
 void GTKWindow::RaiseInEmbedParent() {
+  if (hidden_for_host_ui_) {
+    return;
+  }
   if (GdkWindow* gdk_window =
           window_ ? gtk_widget_get_window(window_) : nullptr) {
     // Maps as well as raises: a plug leaves mapping to its GtkSocket, and the
     // host isn't one.
     gdk_window_show(gdk_window);
+  }
+}
+
+void GTKWindow::SetHiddenForHostUI(bool hidden) {
+  hidden_for_host_ui_ = hidden;
+  GdkWindow* gdk_window = window_ ? gtk_widget_get_window(window_) : nullptr;
+  if (!gdk_window) {
+    return;
+  }
+  if (hidden) {
+    gdk_window_hide(gdk_window);
+  } else {
+    RaiseInEmbedParent();
   }
 }
 

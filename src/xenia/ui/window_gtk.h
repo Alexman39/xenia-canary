@@ -83,10 +83,13 @@ class GTKWindow : public Window {
   bool IsEmbedded() const { return embed_parent_ != nullptr; }
   void FillEmbedParent();
   void RaiseInEmbedParent();
+  // While the host draws system UI (see HostIpc), it shows through instead.
+  void SetHiddenForHostUI(bool hidden);
   static GdkFilterReturn EmbedParentFilter(GdkXEvent* xevent, GdkEvent* event,
                                            gpointer data);
   // Owning reference to the foreign parent window.
   GdkWindow* embed_parent_ = nullptr;
+  bool hidden_for_host_ui_ = false;
 
   // Non-owning (initially floating) references to the widgets.
   GtkWidget* window_ = nullptr;
