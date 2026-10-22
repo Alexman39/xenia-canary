@@ -24,6 +24,8 @@
 namespace xe {
 namespace ui {
 
+struct RawImage;
+
 // The channel to the program hosting the emulator (xbox-dash, see
 // --host_ipc), which draws the system UI games ask for (keyboard, sign-in,
 // message boxes...) in place of Xenia's own dialogs.
@@ -46,6 +48,11 @@ class HostIpc {
   // draws over where the game is (see SetHostUIListener).
   std::optional<Message> Request(std::string_view type, Message fields);
   void Send(std::string_view type, Message fields);
+
+  // Saves a frame of the game for the host to draw its UI over (the game is
+  // hidden meanwhile) as a PNG next to the socket, and returns its path, or
+  // empty on failure. The host deletes it once read.
+  std::string SaveFrame(const RawImage& image);
 
   bool host_ui_active() const;
   // Called (from the thread that changed it) when host UI becomes active or
@@ -73,6 +80,7 @@ class HostIpc {
   std::condition_variable replied_;
   bool closed_ = false;
   uint64_t next_id_ = 1;
+  uint64_t next_frame_ = 1;
   std::map<uint64_t, std::optional<Message>> pending_;
   std::function<void(bool active)> host_ui_listener_;
 };

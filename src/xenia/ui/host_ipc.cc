@@ -10,13 +10,16 @@
 #include "xenia/ui/host_ipc.h"
 
 #include <cstring>
+#include <fstream>
 
 #include "third_party/rapidjson/include/rapidjson/document.h"
 #include "third_party/rapidjson/include/rapidjson/stringbuffer.h"
 #include "third_party/rapidjson/include/rapidjson/writer.h"
+#include "third_party/stb/stb_image_write.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/platform.h"
+#include "xenia/ui/presenter.h"
 
 #if XE_PLATFORM_LINUX
 #include <sys/socket.h>
@@ -110,6 +113,37 @@ std::optional<HostIpc::Message> HostIpc::Request(std::string_view type,
 
 void HostIpc::Send(std::string_view type, Message fields) {
   Write(type, std::nullopt, fields);
+}
+
+std::string HostIpc::SaveFrame(const RawImage& image) {
+  if (!image.width || !image.height) {
+    return {};
+  }
+  std::string path;
+  {
+    std::lock_guard lock(mutex_);
+    path = fmt::format("{}.frame{}.png", cvars::host_ipc, next_frame_++);
+  }
+  // The capture's fourth channel is unused (X8): make it opaque.
+  std::vector<uint8_t> pixels(image.data);
+  for (uint32_t y = 0; y < image.height; ++y) {
+    uint8_t* row = pixels.data() + y * image.stride;
+    for (uint32_t x = 0; x < image.width; ++x) {
+      row[x * 4 + 3] = 0xFF;
+    }
+  }
+  std::ofstream file(path, std::ios::binary);
+  if (!file || !stbi_write_png_to_func(
+                   [](void* context, void* data, int size) {
+                     static_cast<std::ofstream*>(context)->write(
+                         static_cast<const char*>(data), size);
+                   },
+                   &file, int(image.width), int(image.height), 4, pixels.data(),
+                   int(image.stride))) {
+    XELOGE("HostIpc: Can't save a frame to {}", path);
+    return {};
+  }
+  return path;
 }
 
 bool HostIpc::host_ui_active() const {

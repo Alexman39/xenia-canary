@@ -11,6 +11,8 @@
 #include "xenia/app/emulator_window.h"
 #include "xenia/base/png_utils.h"
 #include "xenia/base/system.h"
+#include "xenia/emulator.h"
+#include "xenia/gpu/graphics_system.h"
 #include "xenia/hid/input_system.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
@@ -21,6 +23,7 @@
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
 #include "xenia/ui/imgui_guest_notification.h"
+#include "xenia/ui/presenter.h"
 
 #include "xenia/kernel/xam/ui/create_profile_ui.h"
 #include "xenia/kernel/xam/ui/game_achievements_ui.h"
@@ -525,6 +528,17 @@ dword_result_t XamShowKeyboardUI_entry(
         // The buffer holds the terminating null too.
         {"max_length", int64_t(buffer_length ? buffer_length - 1 : 0)},
     };
+    // The game hides while the host draws the keyboard: give it the last
+    // frame to draw it over, like the console's overlay over the game.
+    xe::ui::RawImage frame;
+    auto* presenter =
+        kernel_state()->emulator()->graphics_system()->presenter();
+    if (presenter && presenter->CaptureGuestOutput(frame)) {
+      std::string frame_path = host->SaveFrame(frame);
+      if (!frame_path.empty()) {
+        request.emplace("frame", frame_path);
+      }
+    }
     auto run = [host, request, buffer, buffer_length](
                    uint32_t& extended_error, uint32_t& length) -> X_RESULT {
       auto reply = host->Request("keyboard", request);
