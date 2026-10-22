@@ -78,6 +78,16 @@ class GTKWindow : public Window {
                                                gpointer user_data);
   static gboolean DrawHandler(GtkWidget* widget, cairo_t* cr, gpointer data);
 
+  // Embedded mode (--embed_window): the window is a GtkPlug inside a foreign
+  // X11 window (the xbox-dash shell), sized to fill it, without a main menu.
+  bool IsEmbedded() const { return embed_parent_ != nullptr; }
+  void FillEmbedParent();
+  void RaiseInEmbedParent();
+  static GdkFilterReturn EmbedParentFilter(GdkXEvent* xevent, GdkEvent* event,
+                                           gpointer data);
+  // Owning reference to the foreign parent window.
+  GdkWindow* embed_parent_ = nullptr;
+
   // Non-owning (initially floating) references to the widgets.
   GtkWidget* window_ = nullptr;
   GtkWidget* box_ = nullptr;

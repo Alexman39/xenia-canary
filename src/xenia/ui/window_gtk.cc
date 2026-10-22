@@ -9,14 +9,23 @@
 
 #include <X11/Xlib-xcb.h>
 #include <gdk/gdkx.h>
+#include <gtk/gtkx.h>
 #include <xcb/xcb.h>
+#include <cstdlib>
 
 #include "xenia/base/assert.h"
+#include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/platform_linux.h"
 #include "xenia/ui/surface_gnulinux.h"
 #include "xenia/ui/virtual_key.h"
 #include "xenia/ui/window_gtk.h"
+
+DEFINE_transient_string(
+    embed_window, "",
+    "X11 window ID (decimal or 0x hex) to embed the emulator window into, "
+    "filling it, instead of opening a top-level window.",
+    "UI");
 
 namespace xe {
 namespace ui {
@@ -38,6 +47,11 @@ GTKWindow::GTKWindow(WindowedAppContext& app_context,
 
 GTKWindow::~GTKWindow() {
   EnterDestructor();
+  if (embed_parent_) {
+    gdk_window_remove_filter(embed_parent_, EmbedParentFilter, this);
+    g_object_unref(embed_parent_);
+    embed_parent_ = nullptr;
+  }
   if (window_) {
     // Set window_ to null to ignore events from now on since this ui::GTKWindow
     // is entering an indeterminate state.
@@ -51,7 +65,32 @@ GTKWindow::~GTKWindow() {
 }
 
 bool GTKWindow::OpenImpl() {
-  window_ = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+  if (!cvars::embed_window.empty()) {
+    GdkDisplay* display = gdk_display_get_default();
+    ::Window parent_xid =
+        ::Window(std::strtoull(cvars::embed_window.c_str(), nullptr, 0));
+    if (GDK_IS_X11_DISPLAY(display) && parent_xid) {
+      embed_parent_ =
+          gdk_x11_window_foreign_new_for_display(display, parent_xid);
+    }
+    if (!embed_parent_) {
+      XELOGE("GTKWindow: Can't embed into window {} (needs X11)",
+             cvars::embed_window);
+      return false;
+    }
+    // Follow the parent's size, and see its other children (the host's own
+    // drawing surfaces, which it may recreate at any time) to stay above them.
+    gdk_window_set_events(
+        embed_parent_,
+        GdkEventMask(gdk_window_get_events(embed_parent_) | GDK_STRUCTURE_MASK |
+                     GDK_SUBSTRUCTURE_MASK));
+    gdk_window_add_filter(embed_parent_, EmbedParentFilter, this);
+    // A GtkPlug creates its X window as a child of the given one. The parent
+    // doesn't need to be a GtkSocket: the XEmbed messages are just ignored.
+    window_ = gtk_plug_new(parent_xid);
+  } else {
+    window_ = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+  }
 
   gtk_window_set_title(GTK_WINDOW(window_), GetTitle().c_str());
 
@@ -60,8 +99,9 @@ bool GTKWindow::OpenImpl() {
   gtk_container_add(GTK_CONTAINER(window_), box_);
 
   // Add the main menu (even if fullscreen was requested, for the initial layout
-  // calculation).
-  const auto* main_menu = dynamic_cast<const GTKMenuItem*>(GetMainMenu());
+  // calculation). Embedded, the host provides all the UI.
+  const auto* main_menu =
+      IsEmbedded() ? nullptr : dynamic_cast<const GTKMenuItem*>(GetMainMenu());
   GtkWidget* main_menu_widget = main_menu ? main_menu->handle() : nullptr;
   if (main_menu_widget) {
     gtk_box_pack_start(GTK_BOX(box_), main_menu_widget, false, false, 0);
@@ -104,9 +144,14 @@ bool GTKWindow::OpenImpl() {
   // it impossible to make the window smaller.
   gtk_widget_set_size_request(drawing_area_, -1, -1);
 
-  // After setting up the initial layout for non-fullscreen, enter fullscreen if
-  // requested.
-  if (IsFullscreen()) {
+  // Embedded, the parent's size is the window's size, and fullscreen is the
+  // host's business.
+  if (IsEmbedded()) {
+    FillEmbedParent();
+    RaiseInEmbedParent();
+  } else if (IsFullscreen()) {
+    // After setting up the initial layout for non-fullscreen, enter fullscreen
+    // if requested.
     if (main_menu_widget) {
       gtk_container_remove(GTK_CONTAINER(box_), main_menu_widget);
     }
@@ -143,6 +188,10 @@ bool GTKWindow::OpenImpl() {
 void GTKWindow::RequestCloseImpl() { gtk_window_close(GTK_WINDOW(window_)); }
 
 void GTKWindow::ApplyNewFullscreen() {
+  if (IsEmbedded()) {
+    return;
+  }
+
   // Various functions here may trigger events that may result in the listeners
   // being invoked, and potentially cause the destruction of the window or
   // fullscreen being toggled from inside this function.
@@ -214,6 +263,9 @@ void GTKWindow::ApplyNewTitle() {
 }
 
 void GTKWindow::ApplyNewMainMenu(MenuItem* old_main_menu) {
+  if (IsEmbedded()) {
+    return;
+  }
   if (IsFullscreen()) {
     // The menu will be set when exiting fullscreen.
     return;
@@ -270,6 +322,61 @@ void GTKWindow::ApplyNewMainMenu(MenuItem* old_main_menu) {
 }
 
 void GTKWindow::FocusImpl() { gtk_window_activate_focus(GTK_WINDOW(window_)); }
+
+void GTKWindow::FillEmbedParent() {
+  if (!window_ || !embed_parent_) {
+    return;
+  }
+  // Asks the X server: GDK's cached size of a foreign window can be stale.
+  int width, height;
+  gdk_window_get_geometry(embed_parent_, nullptr, nullptr, &width, &height);
+  // Nothing manages a plug's X window, and without a GtkSocket nothing tells
+  // GTK the plug's size either: resize the X window and lay out the widgets
+  // (the drawing area, whose size the swapchain follows) directly.
+  gtk_window_resize(GTK_WINDOW(window_), width, height);
+  if (GdkWindow* gdk_window = gtk_widget_get_window(window_)) {
+    gdk_window_move_resize(gdk_window, 0, 0, width, height);
+  }
+  GtkAllocation allocation = {0, 0, width, height};
+  gtk_widget_size_allocate(window_, &allocation);
+}
+
+void GTKWindow::RaiseInEmbedParent() {
+  if (GdkWindow* gdk_window =
+          window_ ? gtk_widget_get_window(window_) : nullptr) {
+    // Maps as well as raises: a plug leaves mapping to its GtkSocket, and the
+    // host isn't one.
+    gdk_window_show(gdk_window);
+  }
+}
+
+GdkFilterReturn GTKWindow::EmbedParentFilter(GdkXEvent* xevent, GdkEvent* event,
+                                             gpointer data) {
+  auto* window = static_cast<GTKWindow*>(data);
+  GdkWindow* gdk_window =
+      window->window_ ? gtk_widget_get_window(window->window_) : nullptr;
+  ::Window self = gdk_window ? gdk_x11_window_get_xid(gdk_window) : 0;
+  const XEvent& e = *reinterpret_cast<const XEvent*>(xevent);
+  switch (e.type) {
+    case ConfigureNotify:
+      if (e.xconfigure.window == e.xconfigure.event) {
+        // The parent itself.
+        window->FillEmbedParent();
+      } else if (e.xconfigure.window != self) {
+        // A sibling moved in the stacking order, maybe above this window.
+        window->RaiseInEmbedParent();
+      }
+      break;
+    case MapNotify:
+      if (e.xmap.window != self) {
+        window->RaiseInEmbedParent();
+      }
+      break;
+    default:
+      break;
+  }
+  return GDK_FILTER_CONTINUE;
+}
 
 std::unique_ptr<Surface> GTKWindow::CreateSurfaceImpl(
     Surface::TypeFlags allowed_types) {
