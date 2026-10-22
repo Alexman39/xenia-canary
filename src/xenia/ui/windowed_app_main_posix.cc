@@ -24,6 +24,13 @@ int main(int argc_pre_gtk, char** argv_pre_gtk) {
     setenv("GDK_BACKEND", "x11", 1);
   }
 
+  // SDL (audio, controllers) otherwise turns SIGINT and SIGTERM into SDL_QUIT
+  // events, which nothing here handles: the process would ignore them, and a
+  // host (or the session ending) couldn't stop it.
+  if (!secure_getenv("SDL_NO_SIGNAL_HANDLERS")) {
+    setenv("SDL_NO_SIGNAL_HANDLERS", "1", 1);
+  }
+
   // Initialize GTK+, which will handle and remove its own arguments from argv.
   // Both GTK+ and Xenia use --option=value argument format (see man
   // gtk-options), however, it's meaningless to try to parse the same argument

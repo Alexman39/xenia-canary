@@ -26,6 +26,7 @@
 #include "xenia/kernel/xconfig.h"
 #include "xenia/kernel/xenumerator.h"
 #include "xenia/kernel/xthread.h"
+#include "xenia/ui/host_ipc.h"
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
 #include "xenia/ui/window.h"
@@ -479,6 +480,16 @@ dword_result_t XamLoaderGetLaunchData_entry(lpvoid_t buffer_ptr,
 }
 DECLARE_XAM_EXPORT1(XamLoaderGetLaunchData, kNone, kSketchy);
 
+// Hosted, a game leaving goes straight back to the host (xbox-dash), with no
+// dialog of Xenia's. "relaunch": the game left launch data for the next start
+// (another title, or itself), so the host starts Xenia again right away.
+[[noreturn]] static void ExitToHost(xe::ui::HostIpc* host, bool relaunch) {
+  host->Send("title_exit", {{"relaunch", relaunch}});
+  config::SaveConfig();
+  xe::FlushLog();
+  std::quick_exit(0);
+}
+
 void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
   auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
 
@@ -487,11 +498,13 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
 
   std::string title;
   std::string message;
+  bool relaunch = false;
 
   // Translate the launch path to a full path.
   if (raw_name_ptr && !raw_name_ptr.value().empty()) {
     loader_data.launch_path = xe::path_to_utf8(raw_name_ptr.value());
     xam->SaveLoaderData();
+    relaunch = true;
     title = "Title was restarted";
     message =
         "Title closed with new launch data. \nPlease restart Xenia. "
@@ -500,6 +513,10 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
     title = "Title terminated";
     message = "Game requested exit to dashboard.";
     assert_always("Game requested exit to dashboard via XamLoaderLaunchTitle");
+  }
+
+  if (auto* host = xe::ui::HostIpc::Get()) {
+    ExitToHost(host, relaunch);
   }
 
   auto display_window = kernel_state()->emulator()->display_window();
@@ -533,6 +550,10 @@ void XamLoaderTerminateTitle_entry() {
   std::string title = "Title terminated";
   std::string message = "Game requested exit to dashboard.";
   assert_always("Game requested exit to dashboard via XamLoaderTerminateTitle");
+
+  if (auto* host = xe::ui::HostIpc::Get()) {
+    ExitToHost(host, false);
+  }
 
   auto display_window = kernel_state()->emulator()->display_window();
   auto imgui_drawer = kernel_state()->emulator()->imgui_drawer();

@@ -49,6 +49,7 @@
 #include "xenia/kernel/xboxkrnl/xboxkrnl_module.h"
 #include "xenia/memory.h"
 #include "xenia/ui/file_picker.h"
+#include "xenia/ui/host_ipc.h"
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
 #include "xenia/ui/imgui_host_notification.h"
@@ -1457,8 +1458,11 @@ bool Emulator::ExceptionCallback(Exception* ex) {
       "Xenia has now paused itself.\n\n"
       "{}",
       crash_msg);
-  // Display a dialog telling the user the guest has crashed.
-  if (display_window_ && imgui_drawer_) {
+  // Display a dialog telling the user the guest has crashed. Hosted, the
+  // host does, and ends this process.
+  if (auto* host = xe::ui::HostIpc::Get()) {
+    host->Send("crashed", {{"message", crash_msg}});
+  } else if (display_window_ && imgui_drawer_) {
     display_window_->app_context().CallInUIThreadSynchronous([this,
                                                               &crash_dlg]() {
       xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_, "Uh-oh!", crash_dlg);

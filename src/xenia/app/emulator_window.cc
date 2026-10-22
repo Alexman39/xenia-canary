@@ -42,6 +42,7 @@
 #include "xenia/kernel/xconfig.h"
 #include "xenia/ui/file_picker.h"
 #include "xenia/ui/graphics_provider.h"
+#include "xenia/ui/host_ipc.h"
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
 #include "xenia/ui/imgui_host_notification.h"
@@ -257,10 +258,15 @@ void EmulatorWindow::ShutdownGraphicsSystemPresenterPainting() {
 }
 
 void EmulatorWindow::OnEmulatorInitialized() {
-  if (!emulator_->kernel_state()
-           ->xam_state()
-           ->profile_manager()
-           ->GetAccountCount()) {
+  // Hosted, the host (xbox-dash) is all the UI there is: no dialogs of
+  // Xenia's own, and no hotkeys opening them.
+  const bool hosted = xe::ui::HostIpc::Get() != nullptr;
+  if (hosted) {
+    disable_hotkeys_ = true;
+  } else if (!emulator_->kernel_state()
+                  ->xam_state()
+                  ->profile_manager()
+                  ->GetAccountCount()) {
     new NoProfileDialog(imgui_drawer_.get(), this);
     disable_hotkeys_ = true;
   }
@@ -280,7 +286,7 @@ void EmulatorWindow::OnEmulatorInitialized() {
   }
 
   // Create a thread to listen for controller hotkeys.
-  if (cvars::controller_hotkeys) {
+  if (cvars::controller_hotkeys && !hosted) {
     Gamepad_HotKeys_Listener =
         threading::Thread::Create({}, [&] { GamepadHotKeys(); });
     Gamepad_HotKeys_Listener->set_name("Gamepad HotKeys Listener");
@@ -1040,7 +1046,7 @@ void EmulatorWindow::ApplyDisplayConfigForCvars() {
 }
 
 void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
-  if (!emulator_initialized_) {
+  if (!emulator_initialized_ || xe::ui::HostIpc::Get()) {
     return;
   }
 
@@ -2264,6 +2270,19 @@ std::string EmulatorWindow::CanonicalizeFileExtension(
   return xe::utf8::lower_ascii(xe::path_to_utf8(path.extension()));
 }
 
+// Hosted, a title that can't launch goes back to the host (xbox-dash) as an
+// error, and Xenia, with nothing to show, exits.
+static bool LaunchFailedHosted(xe::ui::WindowedAppContext& app_context,
+                               const std::string& message) {
+  xe::ui::HostIpc* host = xe::ui::HostIpc::Get();
+  if (!host) {
+    return false;
+  }
+  host->Send("error", {{"severity", "error"}, {"message", message}});
+  app_context.QuitFromUIThread();
+  return true;
+}
+
 xe::X_STATUS EmulatorWindow::RunTitle(
     const std::filesystem::path& path_to_file) {
   std::error_code ec = {};
@@ -2287,8 +2306,10 @@ xe::X_STATUS EmulatorWindow::RunTitle(
 
     ClearDialogs();
 
-    xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_.get(),
-                                        "Title Launch Failed!", log_msg);
+    if (!LaunchFailedHosted(app_context_, log_msg)) {
+      xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_.get(),
+                                          "Title Launch Failed!", log_msg);
+    }
 
     return X_STATUS_NO_SUCH_FILE;
   }
@@ -2310,11 +2331,12 @@ xe::X_STATUS EmulatorWindow::RunTitle(
 
   if (extension == ".7z" || extension == ".zip" || extension == ".rar" ||
       extension == ".tar" || extension == ".gz") {
-    xe::ShowSimpleMessageBox(
-        xe::SimpleMessageBoxType::Error,
-        fmt::format(
-            "Unsupported format!\n"
-            "Xenia does not support running software in an archived format."));
+    const std::string message =
+        "Unsupported format!\n"
+        "Xenia does not support running software in an archived format.";
+    if (!LaunchFailedHosted(app_context_, message)) {
+      xe::ShowSimpleMessageBox(xe::SimpleMessageBoxType::Error, message);
+    }
 
     return X_STATUS_UNSUCCESSFUL;
   }
@@ -2328,9 +2350,14 @@ xe::X_STATUS EmulatorWindow::RunTitle(
   if (result) {
     XELOGE("Failed to launch target: {:08X}", result);
 
-    xe::ui::ImGuiDialog::ShowMessageBox(
-        imgui_drawer_.get(), "Title Launch Failed!",
-        "Failed to launch title.\n\nCheck xenia.log for technical details.");
+    if (!LaunchFailedHosted(
+            app_context_,
+            fmt::format("The game couldn't be started (error {:08X}).",
+                        result))) {
+      xe::ui::ImGuiDialog::ShowMessageBox(
+          imgui_drawer_.get(), "Title Launch Failed!",
+          "Failed to launch title.\n\nCheck xenia.log for technical details.");
+    }
 
     emulator_->file_system()->Clear();
   } else {

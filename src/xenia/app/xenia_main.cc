@@ -28,6 +28,7 @@
 #include "xenia/emulator.h"
 #include "xenia/kernel/xam/xam_module.h"
 #include "xenia/ui/file_picker.h"
+#include "xenia/ui/host_ipc.h"
 #include "xenia/ui/window.h"
 #include "xenia/ui/window_listener.h"
 #include "xenia/ui/windowed_app.h"
@@ -482,6 +483,9 @@ std::vector<std::unique_ptr<hid::InputDriver>> EmulatorApp::CreateInputDrivers(
 bool EmulatorApp::OnInitialize() {
   Profiler::Initialize();
   Profiler::ThreadEnter("Main");
+
+  // Hosted, connect first, so that even early errors go to the host.
+  xe::ui::HostIpc::Get();
 
   // Figure out where internal files and content should go.
   std::filesystem::path storage_root = cvars::storage_root;

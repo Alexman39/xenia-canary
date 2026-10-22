@@ -11,6 +11,7 @@
 #define XENIA_BASE_SYSTEM_H_
 
 #include <filesystem>
+#include <functional>
 #include <string_view>
 
 #include "xenia/base/platform.h"
@@ -40,6 +41,14 @@ enum class SimpleMessageBoxType {
 
 // This is expected to block the caller until the message box is closed.
 void ShowSimpleMessageBox(SimpleMessageBoxType type, std::string_view message);
+
+#if XE_PLATFORM_LINUX
+// Takes over ShowSimpleMessageBox (when hosted, the host shows the message),
+// or with null, gives it back.
+void SetSimpleMessageBoxHandler(
+    std::function<void(SimpleMessageBoxType type, std::string_view message)>
+        handler);
+#endif
 
 }  // namespace xe
 

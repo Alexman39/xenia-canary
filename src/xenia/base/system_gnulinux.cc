@@ -35,7 +35,20 @@ void LaunchFileExplorer(const std::filesystem::path& path) {
   system(cmd.c_str());
 }
 
+static std::function<void(SimpleMessageBoxType, std::string_view)>
+    simple_message_box_handler;
+
+void SetSimpleMessageBoxHandler(
+    std::function<void(SimpleMessageBoxType type, std::string_view message)>
+        handler) {
+  simple_message_box_handler = std::move(handler);
+}
+
 void ShowSimpleMessageBox(SimpleMessageBoxType type, std::string_view message) {
+  if (simple_message_box_handler) {
+    simple_message_box_handler(type, message);
+    return;
+  }
   void* libsdl2 = dlopen("libSDL2.so", RTLD_LAZY | RTLD_LOCAL);
   assert_not_null(libsdl2);
   if (libsdl2) {

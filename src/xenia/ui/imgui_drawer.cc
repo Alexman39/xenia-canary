@@ -18,6 +18,7 @@
 #include "xenia/base/clock.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
+#include "xenia/ui/host_ipc.h"
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_notification.h"
 #include "xenia/ui/resources.h"
@@ -128,6 +129,20 @@ void ImGuiDrawer::RemoveDialog(ImGuiDialog* dialog) {
 
 void ImGuiDrawer::AddNotification(ImGuiNotification* dialog) {
   assert_not_null(dialog);
+  // Hosted, the host shows notifications its own way, and Xenia none: pass it
+  // on, and delete it once its constructor (which calls this) has returned.
+  if (HostIpc* host = HostIpc::Get()) {
+    host->Send(
+        "notification",
+        {{"kind", dialog->GetNotificationType() == NotificationType::Guest
+                      ? "guest"
+                      : "host"},
+         {"title", std::string(dialog->GetTitle())},
+         {"description", std::string(dialog->GetDescription())},
+         {"user_index", int64_t(dialog->GetUserIndex())}});
+    window_->app_context().CallInUIThread([dialog]() { delete dialog; });
+    return;
+  }
   // Check if already added.
   if (std::ranges::find(std::as_const(notifications_), dialog) !=
       notifications_.cend()) {

@@ -55,7 +55,7 @@ class ImGuiNotification {
                     std::string& description, uint8_t user_index,
                     uint8_t position_id = 0);
 
-  ~ImGuiNotification();
+  virtual ~ImGuiNotification();
 
   void Draw();
 
@@ -66,6 +66,10 @@ class ImGuiNotification {
   void SetDeletionPending() { marked_for_deletion_ = true; }
 
  protected:
+  // Hosted (see HostIpc), the drawer forwards notifications to the host
+  // instead of drawing them.
+  friend class ImGuiDrawer;
+
   ImGuiDrawer* GetDrawer() { return imgui_drawer_; }
 
   const bool IsNotificationClosingTime() const {

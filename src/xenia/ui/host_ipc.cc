@@ -19,6 +19,7 @@
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/platform.h"
+#include "xenia/base/system.h"
 #include "xenia/ui/presenter.h"
 
 #if XE_PLATFORM_LINUX
@@ -61,7 +62,17 @@ HostIpc* HostIpc::Get() {
       return nullptr;
     }
     XELOGI("HostIpc: Connected to {}", cvars::host_ipc);
-    return new HostIpc(fd);
+    auto* host = new HostIpc(fd);
+    // Xenia's native message boxes (errors, warnings) go to the host too.
+    xe::SetSimpleMessageBoxHandler([host](SimpleMessageBoxType type,
+                                          std::string_view message) {
+      host->Send("error", {{"severity",
+                            type == SimpleMessageBoxType::Error     ? "error"
+                            : type == SimpleMessageBoxType::Warning ? "warning"
+                                                                    : "help"},
+                           {"message", std::string(message)}});
+    });
+    return host;
 #else
     XELOGE("HostIpc: Not supported on this platform");
     return nullptr;
